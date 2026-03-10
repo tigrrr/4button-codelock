@@ -1,5 +1,5 @@
 blueprint:
-  name: Secure 4 Button Keypad With Telegram Alert
+  name: Secure 4 Button Keypad codelock
   description: >
     Rolling keypad cipher using 4 buttons.
     Supports repeated digits, timeout reset, and lockout after 3 failures.
@@ -181,3 +181,4 @@ action:
 
               - variables:
                   fails: 0
+
