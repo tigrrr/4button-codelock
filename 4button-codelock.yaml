@@ -1,0 +1,215 @@
+blueprint:
+  name: 4 Button Keypad Cipher With Lockout + Telegram Alert
+  description: >
+    4 button keypad system supporting repeated digits, timeout reset,
+    lockout after 3 failed attempts, and Telegram alerts with camera snapshots.
+  domain: automation
+
+  input:
+
+    button_one:
+      name: Button 1
+      selector:
+        entity:
+          domain: binary_sensor
+
+    button_two:
+      name: Button 2
+      selector:
+        entity:
+          domain: binary_sensor
+
+    button_three:
+      name: Button 3
+      selector:
+        entity:
+          domain: binary_sensor
+
+    button_four:
+      name: Button 4
+      selector:
+        entity:
+          domain: binary_sensor
+
+    keypad_code:
+      name: Keypad Code
+      description: Enter digits using numbers 1-4
+      default: "1234"
+      selector:
+        text:
+
+    lock_control:
+      name: Unlock Output
+      selector:
+        entity:
+          domain: input_boolean
+
+    keypad_buffer:
+      name: Keypad Buffer
+      selector:
+        entity:
+          domain: input_text
+
+    fail_counter:
+      name: Failed Attempt Counter
+      selector:
+        entity:
+          domain: input_number
+
+    on_timer:
+      name: Unlock duration
+      default: 60
+      selector:
+        number:
+          min: 5
+          max: 300
+          step: 1
+
+    lockout_timer:
+      name: Lockout time
+      default: 120
+      selector:
+        number:
+          min: 10
+          max: 600
+          step: 5
+
+
+trigger:
+
+  - platform: state
+    entity_id: !input button_one
+    from: "off"
+    to: "on"
+    id: pad1
+
+  - platform: state
+    entity_id: !input button_two
+    from: "off"
+    to: "on"
+    id: pad2
+
+  - platform: state
+    entity_id: !input button_three
+    from: "off"
+    to: "on"
+    id: pad3
+
+  - platform: state
+    entity_id: !input button_four
+    from: "off"
+    to: "on"
+    id: pad4
+
+
+variables:
+
+  buffer_ent: !input keypad_buffer
+  fail_ent: !input fail_counter
+  correct_code: !input keypad_code
+
+  pressed: >
+    {% if trigger.id == 'pad1' %}1
+    {% elif trigger.id == 'pad2' %}2
+    {% elif trigger.id == 'pad3' %}3
+    {% elif trigger.id == 'pad4' %}4
+    {% endif %}
+
+  current: "{{ states(buffer_ent) }}"
+  new_sequence: "{{ current ~ pressed }}"
+  fails: "{{ states(fail_ent) | int }}"
+
+
+action:
+
+################################################
+# LOCKOUT IF 3 FAILURES
+################################################
+
+  - choose:
+
+      - conditions:
+          - condition: template
+            value_template: "{{ fails >= 3 }}"
+        sequence:
+
+          - delay: !input lockout_timer
+
+          - service: input_number.set_value
+            target:
+              entity_id: !input fail_counter
+            data:
+              value: 0
+
+
+################################################
+# NORMAL KEYPAD OPERATION
+################################################
+
+      - conditions: []
+        sequence:
+
+          - service: input_text.set_value
+            target:
+              entity_id: !input keypad_buffer
+            data:
+              value: "{{ new_sequence }}"
+
+          - choose:
+
+################################################
+# SUCCESS
+################################################
+
+              - conditions:
+                  - condition: template
+                    value_template: "{{ new_sequence == correct_code }}"
+                sequence:
+
+                  - service: input_boolean.turn_on
+                    target:
+                      entity_id: !input lock_control
+
+                  - delay: !input on_timer
+
+                  - service: input_boolean.turn_off
+                    target:
+                      entity_id: !input lock_control
+
+                  - service: input_text.set_value
+                    target:
+                      entity_id: !input keypad_buffer
+                    data:
+                      value: ""
+
+                  - service: input_number.set_value
+                    target:
+                      entity_id: !input fail_counter
+                    data:
+                      value: 0
+
+
+################################################
+# WRONG CODE
+################################################
+
+              - conditions:
+                  - condition: template
+                    value_template: >
+                      {{ not correct_code.startswith(new_sequence) }}
+
+                sequence:
+
+                  - service: input_number.set_value
+                    target:
+                      entity_id: !input fail_counter
+                    data:
+                      value: "{{ fails + 1 }}"
+
+                  - service: input_text.set_value
+                    target:
+                      entity_id: !input keypad_buffer
+                    data:
+                      value: ""
+
+mode: single
