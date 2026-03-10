@@ -114,6 +114,7 @@ variables:
   new_buffer: "{{ (buffer ~ digit)[-20:] }}"
   fails: "{{ states(fail_ent) | int }}"
 
+
 action:
 
 ################################################
@@ -130,28 +131,67 @@ action:
 # SUCCESS
 ################################################
 
-  - choose:
+  - if:
+      - condition: template
+        value_template: "{{ new_buffer.endswith(code | trim) }}"
+    then:
 
-      - conditions:
+      - service: input_boolean.turn_on
+        target:
+          entity_id: !input unlock_output
+
+      - delay: !input unlock_time
+
+      - service: input_boolean.turn_off
+        target:
+          entity_id: !input unlock_output
+
+      - service: input_text.set_value
+        target:
+          entity_id: !input keypad_buffer
+        data:
+          value: ""
+
+      - service: input_number.set_value
+        target:
+          entity_id: !input fail_counter
+        data:
+          value: 0
+
+      - stop: "Code accepted"
+
+################################################
+# FAILURE
+################################################
+
+  - if:
+      - condition: template
+        value_template: >
+          {{ new_buffer | length >= code | length }}
+    then:
+
+      - service: input_number.set_value
+        target:
+          entity_id: !input fail_counter
+        data:
+          value: "{{ fails + 1 }}"
+
+      - service: input_text.set_value
+        target:
+          entity_id: !input keypad_buffer
+        data:
+          value: ""
+
+################################################
+# LOCKOUT
+################################################
+
+      - if:
           - condition: template
-            value_template: "{{ new_buffer.endswith(code | trim) }}"
-        sequence:
+            value_template: "{{ fails + 1 >= 3 }}"
+        then:
 
-          - service: input_boolean.turn_on
-            target:
-              entity_id: !input unlock_output
-
-          - delay: !input unlock_time
-
-          - service: input_boolean.turn_off
-            target:
-              entity_id: !input unlock_output
-
-          - service: input_text.set_value
-            target:
-              entity_id: !input keypad_buffer
-            data:
-              value: ""
+          - delay: !input lockout_time
 
           - service: input_number.set_value
             target:
@@ -159,50 +199,9 @@ action:
             data:
               value: 0
 
-################################################
-# FAILURE
-################################################
-
-      - conditions:
-          - condition: template
-            value_template: >
-              {{ new_buffer | length >= code | length and
-                 not new_buffer.endswith(code | trim) }}
-
-        sequence:
-
-          - service: input_number.set_value
-            target:
-              entity_id: !input fail_counter
-            data:
-              value: "{{ fails + 1 }}"
-
-          - service: input_text.set_value
-            target:
-              entity_id: !input keypad_buffer
-            data:
-              value: ""
 
 ################################################
-# LOCKOUT
-################################################
-
-          - if:
-              - condition: template
-                value_template: "{{ fails + 1 >= 3 }}"
-            then:
-
-              - delay: !input lockout_time
-
-              - service: input_number.set_value
-                target:
-                  entity_id: !input fail_counter
-                data:
-                  value: 0
-
-
-################################################
-# AUTO RESET AFTER 13s
+# AUTO RESET AFTER 10s
 ################################################
 
   - wait_for_trigger:
@@ -213,16 +212,15 @@ action:
           - !input button_three
           - !input button_four
         to: "on"
-    timeout: "00:00:13"
+    timeout: "00:00:10"
 
-  - choose:
-      - conditions:
-          - condition: template
-            value_template: "{{ wait.trigger is none }}"
-        sequence:
+  - if:
+      - condition: template
+        value_template: "{{ wait.trigger is none }}"
+    then:
 
-          - service: input_text.set_value
-            target:
-              entity_id: !input keypad_buffer
-            data:
-              value: ""
+      - service: input_text.set_value
+        target:
+          entity_id: !input keypad_buffer
+        data:
+          value: ""
