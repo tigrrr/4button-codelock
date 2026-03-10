@@ -1,205 +1,227 @@
 blueprint:
-  name: Secure 4 Button Keypad With Lockout
+  name: Reliable 4 Button Keypad With Lockout
   description: >
-    4 button keypad supporting repeated digits, rolling detection,
-    timeout reset and lockout after failed attempts.
+    4-button keypad with repeated digits, helper-based buffer,
+    13-second reset, and lockout after 3 failed attempts.
   domain: automation
+  homeassistant:
+    min_version: 2024.6.0
 
   input:
-
     button_one:
       name: Button 1
       selector:
         entity:
-          domain: binary_sensor
+          filter:
+            - domain: binary_sensor
+          multiple: false
 
     button_two:
       name: Button 2
       selector:
         entity:
-          domain: binary_sensor
+          filter:
+            - domain: binary_sensor
+          multiple: false
 
     button_three:
       name: Button 3
       selector:
         entity:
-          domain: binary_sensor
+          filter:
+            - domain: binary_sensor
+          multiple: false
 
     button_four:
       name: Button 4
       selector:
         entity:
-          domain: binary_sensor
+          filter:
+            - domain: binary_sensor
+          multiple: false
 
     keypad_code:
-      name: Unlock Code
-      description: Digits 1-4 allowed
+      name: Unlock code
+      description: Use digits 1-4, for example 1234 or 1122
       default: "1234"
       selector:
         text:
 
     keypad_buffer:
-      name: Keypad Buffer Helper
+      name: Keypad buffer helper
       selector:
         entity:
-          domain: input_text
+          filter:
+            - domain: input_text
+          multiple: false
 
     fail_counter:
-      name: Failed Attempt Counter
+      name: Fail counter helper
       selector:
         entity:
-          domain: input_number
+          filter:
+            - domain: input_number
+          multiple: false
 
     unlock_output:
-      name: Unlock Output
+      name: Unlock output
       selector:
         entity:
-          domain: input_boolean
+          filter:
+            - domain: input_boolean
+          multiple: false
 
     unlock_time:
       name: Unlock duration
-      default: 60
+      default: 10
       selector:
         number:
-          min: 5
-          max: 300
+          min: 1
+          max: 120
           step: 1
+          mode: slider
 
     lockout_time:
-      name: Lockout time
-      default: 120
+      name: Lockout duration
+      default: 60
       selector:
         number:
           min: 10
           max: 600
-          step: 10
+          step: 5
+          mode: slider
 
-mode: single
-
-trigger:
-
-  - platform: state
+triggers:
+  - trigger: state
     entity_id: !input button_one
     from: "off"
     to: "on"
     id: b1
 
-  - platform: state
+  - trigger: state
     entity_id: !input button_two
     from: "off"
     to: "on"
     id: b2
 
-  - platform: state
+  - trigger: state
     entity_id: !input button_three
     from: "off"
     to: "on"
     id: b3
 
-  - platform: state
+  - trigger: state
     entity_id: !input button_four
     from: "off"
     to: "on"
     id: b4
 
 variables:
-
   buffer_ent: !input keypad_buffer
   fail_ent: !input fail_counter
+  unlock_ent: !input unlock_output
   code: !input keypad_code
 
-  digit: >
+  digit: >-
     {% if trigger.id == 'b1' %}1
     {% elif trigger.id == 'b2' %}2
     {% elif trigger.id == 'b3' %}3
     {% elif trigger.id == 'b4' %}4
-    {% endif %}
+    {% else %}{% endif %}
 
-  buffer: "{{ states(buffer_ent) }}"
-  new_buffer: "{{ buffer ~ digit }}"
-  fails: "{{ states(fail_ent) | int }}"
+  current_buffer: "{{ states(buffer_ent) | string }}"
+  code_length: "{{ code | length }}"
+  new_buffer: "{{ (current_buffer ~ digit)[-20:] }}"
+  fails: "{{ states(fail_ent) | int(0) }}"
 
-action:
+conditions: []
 
-################################################
-# UPDATE BUFFER
-################################################
+actions:
+  - alias: Stop immediately if already locked out
+    if:
+      - condition: template
+        value_template: "{{ fails >= 3 }}"
+    then:
+      - stop: Locked out
 
-  - service: input_text.set_value
+  - alias: Append pressed digit to buffer
+    action: input_text.set_value
     target:
       entity_id: !input keypad_buffer
     data:
       value: "{{ new_buffer }}"
 
-################################################
-# SUCCESS
-################################################
-
-  - choose:
-
-      - conditions:
+  - alias: Check keypad result
+    choose:
+      - alias: Correct code entered
+        conditions:
           - condition: template
-            value_template: "{{ new_buffer == code }}"
+            value_template: "{{ new_buffer.endswith(code) }}"
         sequence:
-
-          - service: input_boolean.turn_on
+          - alias: Turn output on
+            action: input_boolean.turn_on
             target:
               entity_id: !input unlock_output
 
-          - delay: !input unlock_time
+          - alias: Hold output on
+            delay:
+              seconds: !input unlock_time
 
-          - service: input_boolean.turn_off
+          - alias: Turn output off
+            action: input_boolean.turn_off
             target:
               entity_id: !input unlock_output
 
-          - service: input_text.set_value
+          - alias: Clear buffer after success
+            action: input_text.set_value
             target:
               entity_id: !input keypad_buffer
             data:
               value: ""
 
-          - service: input_number.set_value
+          - alias: Reset fail counter after success
+            action: input_number.set_value
             target:
               entity_id: !input fail_counter
             data:
               value: 0
 
-################################################
-# WRONG CODE
-################################################
-
-      - conditions:
+      - alias: Wrong full-length attempt
+        conditions:
           - condition: template
-            value_template: >
-              {{ not code.startswith(new_buffer) }}
-
+            value_template: >-
+              {{ (new_buffer | length) >= (code | length)
+                 and not new_buffer.endswith(code) }}
         sequence:
-
-          - service: input_number.set_value
+          - alias: Increment fail counter
+            action: input_number.set_value
             target:
               entity_id: !input fail_counter
             data:
               value: "{{ fails + 1 }}"
 
-          - service: input_text.set_value
+          - alias: Clear buffer after wrong attempt
+            action: input_text.set_value
             target:
               entity_id: !input keypad_buffer
             data:
               value: ""
 
-################################################
-# LOCKOUT
-################################################
-
-          - if:
+          - alias: Lock out after 3 failed attempts
+            if:
               - condition: template
-                value_template: "{{ fails >= 3 }}"
+                value_template: "{{ (fails + 1) >= 3 }}"
             then:
+              - delay:
+                  seconds: !input lockout_time
 
-              - delay: !input lockout_time
-
-              - service: input_number.set_value
+              - alias: Reset fail counter after lockout
+                action: input_number.set_value
                 target:
                   entity_id: !input fail_counter
                 data:
                   value: 0
+
+mode: queued
+max: 10
+max_exceeded: silent
